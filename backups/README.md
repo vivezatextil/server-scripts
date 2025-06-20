@@ -91,7 +91,7 @@ Agrega la siguiente línea para ejecutar backup diario a las 2 AM:
 
 ---
 
-## 6. Restauración dde backup
+## 6. Restauración de backup
 
 Para restaurar un backup:
 
