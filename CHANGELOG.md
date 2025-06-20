@@ -7,6 +7,14 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.0.0] - 2025-06-21
+
+> **Importante:** Este cambio rompe compatibilidad con versiones anteriores y puede requerir ajustes en scripts o configuraciones que dependían de los siguientes nombres y rutas.
+
+### Changed
+- Renombrado el script `backup_server.sh` y su carpeta a `backupmgr` para mayor claridad y profesionalismo.
+- Actualizado el script de instalación `install.sh` para reflejar los nuevos nombres y rutas de los scripts.
+
 ## [1.0.0] - 2025-06-20
 
 ### Added
