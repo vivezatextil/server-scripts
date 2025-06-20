@@ -4,7 +4,8 @@
 USER_NAME=${SUDO_USER:-$(whoami)}
 REPO_ALIAS="github-vivezatextil"
 REPO_PATH="vivezatextil/server-scripts.git"
-CLONE_DIR="$HOME/server-scripts"
+HOME_DIR=$(eval echo "~$USER_NAME")
+CLONE_DIR="$HOME_DIR/server-scripts"
 TARGET_DIR="/opt/server-scripts"
 BIN_DIR="/usr/local/bin"
 
@@ -30,7 +31,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Cambia el propietario para que el usuario actual tenga acceso
-sudo chown -R $(whoami):$(whoami) "$TARGET_DIR"
+sudo chown -R "$USER_NAME":"$USER_NAME" "$TARGET_DIR"
 
 # Dá permisos de ejecución a todos los scripts .sh dentro del repo
 echo "Asignando permisos de ejecución..."
