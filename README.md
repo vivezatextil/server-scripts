@@ -59,7 +59,7 @@ Si recibes un error, indica que hay problema con la clave o el alias.
 Para instalar los cripts en el servidor basta con ejecutar:
 
 ```bash
-curl -o- https://raw.githubusercontent.com/vivezatextil/server-scripts/refs/heads/main/install.sh?token=GHSAT0AAAAAADF2TV5DYQG36QXCYC2HX6XG2CVTKWQ | sudo bash
+curl -o- https://raw.githubusercontent.com/vivezatextil/server-scripts/refs/heads/main/install.sh?token=GHSAT0AAAAAADF2TV5CRGPQHIN4RFPJ7DW42CVTQMA | sudo bash
 ```
 
 Esto clonara el repositorio en `/opt/server-scripts`, creará los symlinks y estaran disponibles para usar globalmente. Es importante realizar la instalación con un usuario con privilegios `sudo`.
