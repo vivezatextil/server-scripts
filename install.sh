@@ -1,6 +1,7 @@
 # !/bin/bash
 
 # Variables
+USER_NAME=${SUDO_USER:-$(whoami)}
 REPO_ALIAS="github-vivezatextil"
 REPO_PATH="vivezatextil/server-scripts.git"
 CLONE_DIR="$HOME/server-scripts"
@@ -14,7 +15,7 @@ if [ -d "$CLONE_DIR" ]; then
 fi
 
 echo "Clonando repositorio..."
-git clone git@$REPO_ALIAS:$REPO_PATH $CLONE_DIR
+sudo -u "$USER_NAME" git clone git@$REPO_ALIAS:$REPO_PATH $CLONE_DIR
 if [ $? -ne 0 ]; then
   echo "Error al clonar el repositorio. Verifica tu conxión y permisos."
   exit 1
