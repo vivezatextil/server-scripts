@@ -1,4 +1,11 @@
 # !/bin/bash
+# Instalación de Server Scripts
+# Versión: 2.0.0
+#
+# Fecha de creación: 2025-06-19
+# Autor: Jacob Palomo
+#
+# Última modificación: 2025-06-20
 
 # Variables
 USER_NAME=${SUDO_USER:-$(whoami)}
@@ -38,7 +45,7 @@ echo "Asignando permisos de ejecución..."
 sudo find "$TARGET_DIR" -type f -name "*.sh" -exec chmod +x {} \;
 
 # Crea symlinks para los scripts en /usr/local/bin
-SCRIPT_FOLDERS=("backups")
+SCRIPT_FOLDERS=("backupmgr")
 
 for folder in "${SCRIPT_FOLDERS[@]}"; do
   SCRIPTS_PATH="$TARGET_DIR/$folder"
