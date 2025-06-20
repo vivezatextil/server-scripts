@@ -59,9 +59,9 @@ Si recibes un error, indica que hay problema con la clave o el alias.
 Para instalar los cripts en el servidor basta con ejecutar:
 
 ```bash
-curl -o- https://raw.githubusercontent.com/vivezatextil/server-scripts/refs/heads/main/install.sh?token=GHSAT0AAAAAADF2TV5CJXQZTUDDHEK3V2UE2CVPSWA | sudo bash
+curl -o- https://raw.githubusercontent.com/vivezatextil/server-scripts/refs/heads/main/install.sh?token=GHSAT0AAAAAADF2TV5DYQG36QXCYC2HX6XG2CVTKWQ | sudo bash
 ```
 
 Esto clonara el repositorio en `/opt/server-scripts`, creará los symlinks y estaran disponibles para usar globalmente. Es importante realizar la instalación con un usuario con privilegios `sudo`.
 
-Para la **configuración de los backups** vea la [documentación del script `backups_server`](https://github.com/vivezatextil/server-scripts/blob/main/backups/README.md). Omita el paso 3 si se instaló mediante el script de instalación `install.sh`.
+Para la **configuración de los backups** vea la [documentación del script `backupmgr.sh`](https://github.com/vivezatextil/server-scripts/blob/main/backupmgr/README.md). Omita el paso 3 si se instaló mediante el script de instalación `install.sh`.
