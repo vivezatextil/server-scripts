@@ -2,8 +2,13 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Gestor avanzado de usuarios SSH - Versión 1.0.0
-# Validaciones básicas y modo estricto activado
+# ----------------------------------------------------------------------------------------
+# Gestor avanzado de usuarios SSH - Versión 1.1.0 (rama usermgr/002-check-dependencies)
+#
+# Agregado:
+# - Validación de dependencias críticas
+# - Pregunta interactiva para instalar dependencias faltantes (fzf, ssh-keygen, etc)
+# ----------------------------------------------------------------------------------------
 
 # Colores para la consola
 RED='\033[0;31m'
@@ -18,7 +23,7 @@ LOG_FILE="$LOG_DIR/usermgr.log"
 KEYS_DIR="/var/lib/usermgr/keys"
 
 # Version del script
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
@@ -61,6 +66,46 @@ preparar_directorios() {
   fi
 }
 
+require_command() {
+  command -v "$1" &>/dev/null
+}
+
+confirmar() {
+  local prompt="${1:-¿Confirmas? [Y/n]: }"
+  local respuesta
+  read -rp "$prompt" respuesta
+  respuesta="${respuesta:-Y}" # Si presiona Enter, asumimos Y
+  if [[ "$respuesta" =~ ^[Yy]$ ]]; then
+    return 0 # Sí
+  else
+    return 1 # No
+  fi
+}
+
+validar_e_instalar_dependencias() {
+  local deps=(fzf ssh-keygen passwd usermod gpasswd awk grep chage last)
+  local faltantes=()
+
+  for cmd in "${deps[@]}"; do
+    if ! require_command "$cmd"; then
+      faltantes+=("$cmd")
+    fi
+  done
+
+  if [ ${#faltantes[@]} -ne 0 ]; then
+    echo -e "\n${YELLOW}Faltan las siguientes dependencias necesarias:${NC}"
+    printf '  - %s\n' "${faltantes[@]}"
+    if confirmar "¿Deseas instalar estos paquetes ahora? [Y/n]: "; then
+      echo "Instalando paquetes faltantes..."
+      sudo apt update
+      sudo apt install -y "${faltantes[@]}"
+    else
+      echo -e "${RED}Instalación cancelada. Debes instalar los paquetes faltantes manualmente para continuar.${NC}"
+      exit 1
+    fi
+  fi
+}
+
 # ----------- SCRIPT PRINCIPAL -----------
 
 clear
@@ -69,6 +114,8 @@ mostrar_version
 validar_root
 validar_grupo_sudo
 preparar_directorios
+validar_e_instalar_dependencias
+clear
 
 echo "Directorio de logs: $LOG_DIR"
 echo "Archivo de log: $LOG_FILE"
