@@ -3,18 +3,10 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.3.0 (rama usermgr/004-add-user)
+# Gestor avanzado de usuarios SSH - Versión 1.4.0 (rama usermgr/006-block-login-ssh)
 #
 # Agregado:
 #
-# - Solicitar selección de rol válida antes de crear el usuario, con opción de cancelar
-# - Crear usuario solo después de confirmar rol y asignar grupos correctamente
-# - Bloquear acceso login por defecto tras creación
-# - Generar claves SSH en directorio seguro con permisos adecuados
-# - Implementar límite máximo de usuarios permitidos por rol y validar antes de asignar
-# - Añadir función mostrar_mensaje para pausar tras mensajes importantes y evitar limpieza inmediata
-# - Aplicar mostrar_mensaje en menú y mensajes de error para mejor experiencia de usuario
-# - Mejorar mensajes con colores y estructura para mayor claridad y usabilidad
 # 
 # ----------------------------------------------------------------------------------------
 
@@ -33,10 +25,13 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
+
+CREATED_USERS=()
+BLOCKED_USERS=()
 
 # ----------- FUNCIONES -----------
 
@@ -155,9 +150,6 @@ validar_e_instalar_dependencias() {
 
 cargar_usuarios() {
   mapfile -t existing_users < <(grep "^AllowUsers" "$SSH_CONFIG" 2>/dev/null | sed "s/^AllowUsers//" | tr -s ' ' '\n' | sed '/^$/d')
-  CREATED_USERS=()
-  BLOCKED_USERS=()
-
   for u in "${existing_users[@]}"; do
     CREATED_USERS+=("$u")
   done
@@ -490,22 +482,139 @@ agregar_usuario() {
   chown -R "$username":"$username" /home/"$username"/.ssh
   log_accion "Claves SSH configuradas para '$username'."
 
- cargar_usuarios
- CREATED_USERS+=("$username")
- actualizar_sshd_config
+  cargar_usuarios
+  CREATED_USERS+=("$username")
+  actualizar_sshd_config
 
- log_accion "Usuario '$username' creado con el rol '$role'."
- echo -e "\n${GREEN}Usuario '$username' creado con rol '$role' y acceso SSH.${NC}"
- read -rp "Presiona Enter para continuar..."
- clear
- echo -e "${CYAN}Clave privada exportable guardada en: $key_file${NC}"
- echo -e "\n${YELLOW}Para que el nuevo usuario pueda conectarse al servidor es necesario que se encuentre registrado y conectado a la VPN.${NC}"
- echo "Use vpnctl."
- echo
- read -rp "Presiona Enter para continuar..."
- clear
+  log_accion "Usuario '$username' creado con el rol '$role'."
+  echo -e "\n${GREEN}Usuario '$username' creado con rol '$role' y acceso SSH.${NC}"
+  read -rp "Presiona Enter para continuar..."
+  clear
+  echo -e "${CYAN}Clave privada exportable guardada en: $key_file${NC}"
+  echo -e "\n${YELLOW}Para que el nuevo usuario pueda conectarse al servidor es necesario que se encuentre registrado y conectado a la VPN.${NC}"
+  echo "Use vpnctl."
+  echo
+  read -rp "Presiona Enter para continuar..."
+  clear
 }
 
+# Bloquear acceso login: solo usuarios con login activo (no bloqueados)
+bloquear_login() {
+  # Obtener usuarios con login activo (no bloqueados)
+  mapfile -t usuarios_activos < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
+
+  usuarios_a_bloquear=()
+  for u in "${usuarios_activos[@]}"; do
+    passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
+    if [[ "$passwd_status" != *" L "* ]]; then
+      usuarios_a_bloquear+=("$u")
+    fi
+  done
+
+  if [ ${#usuarios_a_bloquear[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios con acceso login activo para bloquear." "$YELLOW"
+    return
+  fi
+
+  # Añadir opción cancelar
+  opciones=("${usuarios_a_bloquear[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear login: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  if usermod -L "$usuario"; then
+    log_accion "Acceso login bloqueado para usuario '$usuario'."
+    mostrar_mensaje "Acceso login bloqueado para '$usuario'." "$GREEN"
+  else
+    mostrar_mensaje "Error bloqueando acceso login para '$usuario'." "$RED"
+  fi
+}
+
+# Desbloquear acceso login: solo usuarios que estén bloqueados
+desbloquear_login() {
+  mapfile -t usuarios_bloqueados < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
+
+  usuarios_a_desbloquear=()
+  for u in "${usuarios_bloqueados[@]}"; do
+    passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
+    if [[ "$passwd_status" == *" L "* ]]; then
+      usuarios_a_desbloquear+=("$u")
+    fi
+  done
+
+  if [ ${#usuarios_a_desbloquear[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios bloqueados para desbloquear login." "$YELLOW"
+    return
+  fi
+
+  opciones=("${usuarios_a_desbloquear[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear login: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  if usermod -U "$usuario"; then
+    log_accion "Acceso login desbloqueado para usuario '$usuario'."
+    mostrar_mensaje "Acceso login desbloqueado para '$usuario'." "$GREEN"
+  else
+    mostrar_mensaje "Error desbloqueando acceso login para '$usuario'." "$RED"
+  fi
+}
+
+# Bloquear acceso SSH: solo usuarios desbloqueados (CREATED_USERS)
+bloquear_ssh() {
+  if [ ${#CREATED_USERS[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios con acceso SSH para bloquear." "$YELLOW"
+    return
+  fi
+
+  opciones=("${CREATED_USERS[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear SSH: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  CREATED_USERS=($(printf '%s\n' "${CREATED_USERS[@]}" | grep -v "^$usuario$"))
+  BLOCKED_USERS+=("$usuario")
+
+  actualizar_sshd_config
+  log_accion "Acceso SSH bloqueado para usuario '$usuario'."
+  mostrar_mensaje "Acceso SSH bloqueado para '$usuario'." "$GREEN"
+}
+
+# Desbloquear acceso SSH: solo usuarios bloqueados (BLOCKED_USERS)
+desbloquear_ssh() {
+  if [ ${#BLOCKED_USERS[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios bloqueados en SSH para desbloquear." "$YELLOW"
+    return
+  fi
+
+  opciones=("${BLOCKED_USERS[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear SSH: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  BLOCKED_USERS=($(printf '%s\n' "${BLOCKED_USERS[@]}" | grep -v "^$usuario$"))
+  CREATED_USERS+=("$usuario")
+
+  actualizar_sshd_config
+  log_accion "Acceso SSH desbloqueado para usuario '$usuario'."
+  mostrar_mensaje "Acceso SSH desbloqueado para '$usuario'." "$GREEN"
+}
 
 # Permite mostrar el menu en consola
 mostrar_menu() {
@@ -547,6 +656,8 @@ mostrar_menu() {
 
 # Ejecución de la opción seleccionada
 menu_principal() {
+  cargar_usuarios
+
   while true; do
     local opcion
     opcion=$(mostrar_menu)
@@ -563,10 +674,10 @@ menu_principal() {
       "Cambiar contraseña login") echo "Función Cambiar contraseña login aún no es implementada.";;
       "Cambiar contraseña SSH") echo "Función cambiar contraseña SSH aún no es implementada." ;;
       "Eliminar usuario") echo "Función Eliminar usuario aún no es implementada." ;;
-      "Bloquear acceso SSH") echo "Función Bloquear acceso SSH aún no es implementada." ;;
-      "Desbloquear acceso SSH") echo "Función Desbloquear acceso SSH aún no es implementada." ;;
-      "Bloquear acceso login") echo "Función Bloquear acceso login aún no es implementada." ;;
-      "Desbloquear acceso login") echo "Función Desbloquear acceso login aún no es implementada." ;;
+      "Bloquear acceso SSH") bloquear_ssh ;;
+      "Desbloquear acceso SSH") desbloquear_ssh ;;
+      "Bloquear acceso login") bloquear_login ;;
+      "Desbloquear acceso login") desbloquear_login ;;
       "Generar reporte") echo "Función Generar reporte aún no es implementada." ;;
       "Ayuda") echo "Función Mostrar ayuda aún no es implementada.";;
       "Salir")
