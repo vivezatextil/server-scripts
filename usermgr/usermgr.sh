@@ -3,11 +3,16 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.4.0 (rama usermgr/006-block-login-ssh)
+# Gestor avanzado de usuarios SSH - Versión 1.5.0 (rama usermgr/007-list-users)
 #
-# Agregado:
+# Añadido:
+# - Función para listar usuarios (`listar_usuarios`) que muestra una tabla con el usuario, rol asignado, estado de acceso login y acceso SSH, con colores para diferenciar estados activos y bloqueados.
+# - Funciones auxiliares para obtener rol de usuario y estado de acceso.
+# - Interfaz de menú actualizada para incluir la opción "Ver usuarios".
 #
-# 
+# Arreglado:
+# - Corrección en `cargar_usuarios`: se reinician los arrays `CREATED_USERS` Y `BLOCKED_USERS` al cargar usuarios, evitando acumulación de datos y errores.
+#
 # ----------------------------------------------------------------------------------------
 
 # Colores para la consola
@@ -25,7 +30,7 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
@@ -149,13 +154,17 @@ validar_e_instalar_dependencias() {
 }
 
 cargar_usuarios() {
+  CREATED_USERS=()
+  BLOCKED_USERS=()
+
   mapfile -t existing_users < <(grep "^AllowUsers" "$SSH_CONFIG" 2>/dev/null | sed "s/^AllowUsers//" | tr -s ' ' '\n' | sed '/^$/d')
+
   for u in "${existing_users[@]}"; do
     CREATED_USERS+=("$u")
   done
 
   mapfile -t system_users < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
-  
+
   for u in "${system_users[@]}"; do
     if ! [[ " ${CREATED_USERS[*]} " =~ " $u " ]]; then
       BLOCKED_USERS+=("$u")
@@ -308,7 +317,7 @@ asignar_rol_usuario() {
 
   local rol=""
   while true; do
-    rol=$(printf '%s\n' "${opciones_menu[@]}" | fzf --prompt="Rol: " --height=10 --border --ansi --no-multi)
+    rol=$(printf '%s\n' "${opciones_menu[@]}" | fzf --prompt="Rol: " --height=10 --border --ansi --no-multi --cycle)
     rol=$(echo "$rol" | tr -d '\r\n' | xargs)
     
     if [[ -z "$rol" || "$rol" == "Cancelar" ]]; then
@@ -520,7 +529,7 @@ bloquear_login() {
   opciones=("${usuarios_a_bloquear[@]}" "Cancelar")
 
   local usuario
-  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear login: " --height=20 --border --ansi --no-multi)
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear login: " --height=20 --border --ansi --no-multi --cycle)
   if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
@@ -554,7 +563,7 @@ desbloquear_login() {
   opciones=("${usuarios_a_desbloquear[@]}" "Cancelar")
 
   local usuario
-  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear login: " --height=20 --border --ansi --no-multi)
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear login: " --height=20 --border --ansi --no-multi --cycle)
   if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
@@ -578,7 +587,7 @@ bloquear_ssh() {
   opciones=("${CREATED_USERS[@]}" "Cancelar")
 
   local usuario
-  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear SSH: " --height=20 --border --ansi --no-multi)
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para bloquear SSH: " --height=20 --border --ansi --no-multi --cycle)
   if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
@@ -602,7 +611,7 @@ desbloquear_ssh() {
   opciones=("${BLOCKED_USERS[@]}" "Cancelar")
 
   local usuario
-  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear SSH: " --height=20 --border --ansi --no-multi)
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para desbloquear SSH: " --height=20 --border --ansi --no-multi --cycle)
   if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
@@ -614,6 +623,119 @@ desbloquear_ssh() {
   actualizar_sshd_config
   log_accion "Acceso SSH desbloqueado para usuario '$usuario'."
   mostrar_mensaje "Acceso SSH desbloqueado para '$usuario'." "$GREEN"
+}
+
+# Función para imprimir una fila con formato y colores
+imprimir_fila() {
+  local usuario="$1"
+  local rol="$2"
+  local acceso_login="$3"
+  local acceso_ssh="$4"
+
+  local color_login color_ssh
+
+  if [[ "$acceso_login" == "activo" ]]; then
+    color_login="$GREEN"
+  else
+    color_login="$RED"
+  fi
+
+  if [[ "$acceso_ssh" == "activo" ]]; then
+    color_ssh="$GREEN"
+  else
+    color_ssh="$RED"
+  fi
+
+  printf "%-15s ${CYAN}%-17s${NC} ${color_login}%-13s${NC} ${color_ssh}%-10s${NC}\n" \
+    "$usuario" "$rol" "$acceso_login" "$acceso_ssh"
+}
+
+# Función para mostrar la tabla completa de usuarios
+imprimir_tabla_usuarios() {
+  local usuarios=("$@") # Array de usuarios con formato: "usuario|rol|login|ssh"
+
+  # Encabezado
+  printf "${BOLD}${YELLOW}%-15s %-17s %-13s %-10s${NC}\n" "Usuario" "Rol" "Acceso Login" "Acceso SSH"
+  printf "%-15s %-17s %-13s %-10s\n" "---------------" "-----------------" "-------------" "----------"
+
+  for linea in "${usuarios[@]}"; do
+    IFS='|' read -r usuario rol login ssh <<< "$linea"
+    imprimir_fila "$usuario" "$rol" "$login" "$ssh"
+  done
+}
+
+# Obtener rol o "sin_rol" si no tiene asignado ninguno
+obtener_rol_usuario() {
+  local usuario="$1"
+  local grupos_usuario
+  grupos_usuario=$(groups "$usuario" 2>/dev/null || echo "")
+
+  for rol in "${roles_disponibles[@]}"; do
+    if [[ " $grupos_usuario " == *" $rol "* ]]; then
+      echo "$rol"
+      return
+    fi
+  done
+  echo "sin_rol"
+}
+
+# Función para determinar estado de login activo o bloqueado
+estado_login() {
+  local usuario="$1"
+  local passwd_status
+  passwd_status=$(passwd -S "$usuario" 2>/dev/null || echo "")
+  if [[ "$passwd_status" == *" L "* ]]; then
+    echo "bloqueado"
+  else
+    echo "activo"
+  fi
+}
+
+# Función para determinar estado de SSH activo o bloqueado
+estado_ssh() {
+  local usuario="$1"
+  # Si el usuario está en CREATED_USERS => activo
+  # Si está en BLOCKED_USERS => bloqueado
+  for u in "${CREATED_USERS[@]}"; do
+    if [[ "$u" == "$usuario" ]]; then
+      echo "activo"
+      return
+    fi
+  done
+  for u in "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" == "$usuario" ]]; then
+      echo "bloqueado"
+      return
+    fi
+  done
+  # Por defecto bloqueado si no encontrado
+  echo "bloqueado"
+}
+
+# Función para listar usuarios en tabla con colores
+listar_usuarios() {
+  local todos_usuarios=()
+  # Unir ambos arrays para no perder ningún usuario
+  # Usamos associative array para evitar duplicados
+  declare -A seen=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    seen["$u"]=1
+  done
+  for usuario in "${!seen[@]}"; do
+    local rol
+    rol=$(obtener_rol_usuario "$usuario")
+    local login_estado
+    login_estado=$(estado_login "$usuario")
+    local ssh_estado
+    ssh_estado=$(estado_ssh "$usuario")
+
+    todos_usuarios+=("$usuario|$rol|$login_estado|$ssh_estado")
+  done
+
+  imprimir_tabla_usuarios "${todos_usuarios[@]}"
+
+  echo
+  read -rp "Presiona Enter para continuar..."
 }
 
 # Permite mostrar el menu en consola
@@ -651,12 +773,12 @@ mostrar_menu() {
     fi
   done
 
-  printf '%s\n' "${opciones_permitidas[@]}" | fzf --prompt="Seleccione opción: " --height=15 --border
+  printf '%s\n' "${opciones_permitidas[@]}" | fzf --prompt="Seleccione opción: " --height=18 --border --header="User Manager v${VERSION}" --cycle --bind 'q:abort'
 }
 
 # Ejecución de la opción seleccionada
 menu_principal() {
-  cargar_usuarios
+	cargar_usuarios
 
   while true; do
     local opcion
@@ -668,7 +790,7 @@ menu_principal() {
     fi
 
     case "$opcion" in
-      "Ver usuarios") echo "Función Ver usuarios aún no es implementada." ;;
+      "Ver usuarios") listar_usuarios ;;
       "Agregar usuario") agregar_usuario ;;
       "Cambiar rol usuario") echo "Función Cambiar rol del usuario aún no es implementada." ;;
       "Cambiar contraseña login") echo "Función Cambiar contraseña login aún no es implementada.";;

@@ -7,6 +7,19 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.
 
 ---
 
+## [1.5.0] - 2025-06-20
+
+### Añadido
+- Función para listar usuarios (`listar_usuarios`) que muestra una tabla con el usuario, rol asignado, estado de acceso login y acceso SSH, con colores para diferenciar estados activos y bloqueados.
+- Funciones auxiliares para obtener rol de usuario y estado de acceso.
+- Interfaz de menú actualizada para incluir la opción "Ver usuarios".
+- La navegación en las listas ahora es ciclica, si llega al final (arriba) vuelve a empezar y visceversa.
+
+### Arreglado
+- Corrección en `cargar_usuarios`: se reinician los arrays `CREATED_USERS` Y `BLOCKED_USERS` al cargar usuarios, evitando acumulación de datos y errores.
+
+---
+
 ## [1.4.0] - 2025-06-20
 
 ### Añadido
