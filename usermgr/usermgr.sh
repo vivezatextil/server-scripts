@@ -521,6 +521,9 @@ bloquear_login() {
 
   usuarios_a_bloquear=()
   for u in "${usuarios_activos[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
     passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
     if [[ "$passwd_status" != *" L "* ]] && [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
       usuarios_a_bloquear+=("$u")
@@ -742,6 +745,9 @@ listar_usuarios() {
   # Usamos associative array para evitar duplicados
   declare -A seen=()
   for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
     seen["$u"]=1
   done
   for usuario in "${!seen[@]}"; do
