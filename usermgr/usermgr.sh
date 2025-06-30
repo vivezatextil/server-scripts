@@ -7,10 +7,14 @@ IFS=$'\n\t'
 #
 # Agregado:
 # - Función `cambiar_rol_usuario` para modificar rol de usuarios.
+# - Función para cambiar contraseña de login a usuarios existentes, con exclusión del usuario protegido 'vivezatextil'.
+# - Función para cambiar contraseña SSH (regenerar claves) para usuarios con acceso SSH activo, excluyendo 'vivezatextil'.
 #
 # Modificado:
 # - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
 # - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
+# - Refactorización en la gestión de listas de usuarios para evitar duplicados al mostrar usuarios en cambio de contraseña login y SSH.
+# - Validación para impedir operaciones de cambio de contraseña sobre el usuario protegido.
 # 
 # ----------------------------------------------------------------------------------------
 
@@ -155,19 +159,35 @@ validar_e_instalar_dependencias() {
 }
 
 cargar_usuarios() {
+  # Reiniciar arrays
+  CREATED_USERS=()
+  BLOCKED_USERS=()
+
+  declare -A created_map=()
+
+  # Obtener usuarios permitidos en SSH
   mapfile -t existing_users < <(grep "^AllowUsers" "$SSH_CONFIG" 2>/dev/null | sed "s/^AllowUsers//" | tr -s ' ' '\n' | sed '/^$/d')
 
   for u in "${existing_users[@]}"; do
-		if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
-    	CREATED_USERS+=("$u")
-		fi
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      # Solo agregar si no existe en el mapa
+      if [[ -z "${created_map[$u]:-}" ]]; then
+        CREATED_USERS+=("$u")
+        created_map["$u"]=1
+      fi
+    fi
   done
 
+  declare -A blocked_map=()
   mapfile -t system_users < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
 
   for u in "${system_users[@]}"; do
-    if [[ "$u" != "$USUARIO_PROTEGIDO" ]] && ! [[ " ${CREATED_USERS[*]} " =~ " $u " ]]; then
-      BLOCKED_USERS+=("$u")
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]] && [[ -z "${created_map[$u]:-}" ]]; then
+      # Solo agregar si no está ya en blocked_map
+      if [[ -z "${blocked_map[$u]:-}" ]]; then
+        BLOCKED_USERS+=("$u")
+        blocked_map["$u"]=1
+      fi
     fi
   done
 }
@@ -752,8 +772,6 @@ listar_usuarios() {
 
 # Función para cambiar el rol de un usuario existente (excepto vivezatextil)
 cambiar_rol_usuario() {
-  cargar_usuarios
-
   # Combinar arrays y eliminar duplicados con un map asociativo, excluyendo 'vivezatextil'
   declare -A usuarios_map=()
   for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
@@ -813,6 +831,87 @@ cambiar_rol_usuario() {
   mostrar_mensaje "Rol de usuario '$usuario' cambiado a '$nuevo_rol'." "$GREEN"
 }
 
+# Función para cambiar contraseña login de un usuario (excepto vivezatextil)
+cambiar_contrasena_login() {
+  # Obtener usuarios con login activo (no bloqueados)
+  mapfile -t usuarios_activos < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
+
+  usuarios=()
+  for u in "${usuarios_activos[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
+    passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
+    if [[ "$passwd_status" != *" L "* ]] && [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios+=("$u")
+    fi
+  done
+
+  opciones=("${usuarios[@]}" "Cancelar")
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para cambiar contraseña login: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  echo "Cambiando contraseña login para usuario: $usuario"
+  if passwd "$usuario"; then
+    log_accion "Contraseña login cambiada para usuario '$usuario'."
+    mostrar_mensaje "Contraseña login cambiada correctamente para '$usuario'." "$GREEN"
+  else
+    mostrar_mensaje "Error al cambiar contraseña login para '$usuario'." "$RED"
+  fi
+}
+
+# Función para cambiar contraseña SSH (regenerar claves) de un usuario (excepto vivezatextil)
+cambiar_contrasena_ssh() {
+  if [ ${#CREATED_USERS[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios con acceso SSH para cambiar clave." "$YELLOW"
+    return
+  fi
+
+  # Filtrar CREATED_USERS para excluir usuario protegido
+  usuarios=()
+  for u in "${CREATED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios+=("$u")
+    fi
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para cambiar clave SSH." "$YELLOW"
+    return
+  fi
+
+  opciones=("${usuarios[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para cambiar clave SSH: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  local user_key_dir="$KEYS_DIR/$usuario"
+  local key_file="$user_key_dir/id_ed25519_$usuario"
+
+  echo "Regenerando claves SSH para usuario: $usuario"
+
+  # Regenerar claves SSH sin frase
+  if sudo -u vivezatextil ssh-keygen -t ed25519 -f "$key_file" -N "" -q; then
+    # Copiar clave pública a authorized_keys del usuario
+    cp "${key_file}.pub" /home/"$usuario"/.ssh/authorized_keys
+    chmod 600 /home/"$usuario"/.ssh/authorized_keys
+    chown -R "$usuario":"$usuario" /home/"$usuario"/.ssh
+
+    log_accion "Clave SSH regenerada para usuario '$usuario'."
+    mostrar_mensaje "Clave SSH regenerada correctamente para '$usuario'. La clave privada está en: $key_file" "$GREEN"
+  else
+    mostrar_mensaje "Error al regenerar clave SSH para '$usuario'." "$RED"
+  fi
+}
+
 # Permite mostrar el menu en consola
 mostrar_menu() {
   local rol_actual
@@ -868,8 +967,8 @@ menu_principal() {
       "Ver usuarios") listar_usuarios ;;
       "Agregar usuario") agregar_usuario ;;
       "Cambiar rol usuario") cambiar_rol_usuario ;;
-      "Cambiar contraseña login") echo "Función Cambiar contraseña login aún no es implementada.";;
-      "Cambiar contraseña SSH") echo "Función cambiar contraseña SSH aún no es implementada." ;;
+      "Cambiar contraseña login") cambiar_contrasena_login ;;
+      "Cambiar contraseña SSH") cambiar_contrasena_ssh ;;
       "Eliminar usuario") echo "Función Eliminar usuario aún no es implementada." ;;
       "Bloquear acceso SSH") bloquear_ssh ;;
       "Desbloquear acceso SSH") desbloquear_ssh ;;
