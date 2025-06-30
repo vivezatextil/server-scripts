@@ -5,6 +5,16 @@ Todos los cambios importantes en este proyecto serán documentados en este archi
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [1.7.0] - 2025-06-30
+
+### Añadido
+- Función `cambiar_rol_usuario` para modifivar el rol de los usuarios.
+
+### Modificado
+- Función `asignar_rol_usuario` para que solo solicite el rol que le será asignado a un usuario (al crearlo o modificar su rol)
+- Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
+
 ---
 
 ## [1.5.0] - 2025-06-20

@@ -3,11 +3,14 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.6.0 (rama usermgr/006-proteger-usuario-principal)
+# Gestor avanzado de usuarios SSH - Versión 1.7.0 (rama usermgr/007-user-management-enhancements)
+#
+# Agregado:
+# - Función `cambiar_rol_usuario` para modificar rol de usuarios.
 #
 # Modificado:
-# - Filtrado para que 'vivezatextil' no aparezca en listados de usuarios para bloqueo/desbloqueo y listado general.
-# - Prevención de operaciones como eliminar, cambiar rol, bloquear/desbloquear acceso login y SSH para el usuario 'vivezatextil'.
+# - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
+# - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
 # 
 # ----------------------------------------------------------------------------------------
 
@@ -26,7 +29,7 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.6.0"
+VERSION="1.7.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
@@ -308,7 +311,7 @@ obtener_rol_actual() {
   echo "sin_rol"
 }
 
-asignar_rol_usuario() {
+solicitar_rol_usuario() {
   local usuario="$1"
   local rol_actual
   rol_actual=$(obtener_rol_actual)
@@ -356,26 +359,6 @@ asignar_rol_usuario() {
     return 1
   fi
 
-  if ! id "$username" &>/dev/null; then
-    echo "$rol"
-    return 0
-  fi
-
-  # Remover usuario de roles anteriores (excepto sudo)
-  for g in "${roles_disponibles[@]}"; do
-    gpasswd -d "$usuario" "$g" 2>/dev/null || true
-  done
-
-  # Agregar al grupo seleccionado
-  usermod -aG "$rol" "$usuario"
-
-  # Gestionar sudo según rol admin
-  if [[ " ${roles_admin[*]} " == *" $rol "* ]]; then
-    usermod -aG sudo "$usuario"
-  else
-    gpasswd -d "$usuario" sudo 2>/dev/null || true
-  fi
-
   log_accion "Usuario '$usuario' asignado al rol '$rol'."
   echo "$rol"
   return 0
@@ -410,7 +393,7 @@ agregar_usuario() {
 
   # Solicitar rol que será asignado al nuevo usuario
   local role
-  role=$(asignar_rol_usuario "$username") || {
+  role=$(solicitar_rol_usuario "$username") || {
     log_accion "Creación de usuario '$username' cancelada."
     mostrar_mensaje "No se asignó rol. Abortando la creación del usuario." "$RED"
     return
@@ -767,6 +750,69 @@ listar_usuarios() {
   read -rp "Presiona Enter para continuar..."
 }
 
+# Función para cambiar el rol de un usuario existente (excepto vivezatextil)
+cambiar_rol_usuario() {
+  cargar_usuarios
+
+  # Combinar arrays y eliminar duplicados con un map asociativo, excluyendo 'vivezatextil'
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != $USUARIO_PROTEGIDO ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  # Convertir mapa a array
+  local usuarios_filtrados=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios_filtrados+=("$u")
+  done
+
+  if [ ${#usuarios_filtrados[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para cambiar rol." "$YELLOW"
+    return
+  fi
+
+  usuarios_filtrados+=("Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${usuarios_filtrados[@]}" | fzf --prompt="Seleccione usuario para cambiar rol: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  # Solicitar nuevo rol
+  local nuevo_rol
+  nuevo_rol=$(solicitar_rol_usuario "$usuario") || {
+    mostrar_mensaje "No se asignó rol. Abortando operación." "$RED"
+    return
+  }
+
+  if ! id "$usuario" &>/dev/null; then
+    mostrar_mensaje "Usuario '$usuario' no existe." "$RED"
+    return
+  fi
+
+  # Remover usuario de roles anteriores (excepto sudo)
+  for g in "${roles_disponibles[@]}"; do
+    gpasswd -d "$usuario" "$g" &>/dev/null || true
+  done
+
+  # Agregar nuevo rol
+  usermod -aG "$nuevo_rol" "$usuario" &>/dev/null
+
+  # Gestionar sudo según rol admin
+  if [[ " ${roles_admin[*]} " == *" $nuevo_rol "* ]]; then
+    usermod -aG sudo "$usuario" &>/dev/null
+  else
+    gpasswd -d "$usuario" sudo &>/dev/null || true
+  fi
+
+  log_accion "Usuario '$usuario' cambiado al rol '$nuevo_rol'."
+  mostrar_mensaje "Rol de usuario '$usuario' cambiado a '$nuevo_rol'." "$GREEN"
+}
+
 # Permite mostrar el menu en consola
 mostrar_menu() {
   local rol_actual
@@ -821,7 +867,7 @@ menu_principal() {
     case "$opcion" in
       "Ver usuarios") listar_usuarios ;;
       "Agregar usuario") agregar_usuario ;;
-      "Cambiar rol usuario") echo "Función Cambiar rol del usuario aún no es implementada." ;;
+      "Cambiar rol usuario") cambiar_rol_usuario ;;
       "Cambiar contraseña login") echo "Función Cambiar contraseña login aún no es implementada.";;
       "Cambiar contraseña SSH") echo "Función cambiar contraseña SSH aún no es implementada." ;;
       "Eliminar usuario") echo "Función Eliminar usuario aún no es implementada." ;;
