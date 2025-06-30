@@ -3,11 +3,26 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.6.0 (rama usermgr/006-proteger-usuario-principal)
+# Gestor avanzado de usuarios SSH - Versión 1.7.0 (rama usermgr/007-user-management-enhancements)
+#
+# Agregado:
+# - Función `cambiar_rol_usuario` para modificar rol de usuarios.
+# - Función para cambiar contraseña de login a usuarios existentes, con exclusión del usuario protegido 'vivezatextil'.
+# - Función para cambiar contraseña SSH (regenerar claves) para usuarios con acceso SSH activo, excluyendo 'vivezatextil'.
+# Función para eliminar usuarios con confirmación previa y limpieza completa de datos.
+# - Eliminación segura excluyendo al usuario protegido `vivezatextil`.
+# - Actualización automática de la configuración SSH luego de eliminar usuarios.
+# - Registro detallado de acciones en el log.
+# - Función para generar reportes de usuarios con detalles de roles y accesos.
+# - Exportación de reportes a archivo CSV.
+# - Visualización formateada de reportes en consola.
 #
 # Modificado:
-# - Filtrado para que 'vivezatextil' no aparezca en listados de usuarios para bloqueo/desbloqueo y listado general.
-# - Prevención de operaciones como eliminar, cambiar rol, bloquear/desbloquear acceso login y SSH para el usuario 'vivezatextil'.
+# - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
+# - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
+# - Refactorización en la gestión de listas de usuarios para evitar duplicados al mostrar usuarios en cambio de contraseña login y SSH.
+# - Validación para impedir operaciones de cambio de contraseña sobre el usuario protegido.
+# - Refactorización general para mejorar manejo de usuarios y roles.
 # 
 # ----------------------------------------------------------------------------------------
 
@@ -26,7 +41,7 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.6.0"
+VERSION="1.7.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
@@ -152,19 +167,35 @@ validar_e_instalar_dependencias() {
 }
 
 cargar_usuarios() {
+  # Reiniciar arrays
+  CREATED_USERS=()
+  BLOCKED_USERS=()
+
+  declare -A created_map=()
+
+  # Obtener usuarios permitidos en SSH
   mapfile -t existing_users < <(grep "^AllowUsers" "$SSH_CONFIG" 2>/dev/null | sed "s/^AllowUsers//" | tr -s ' ' '\n' | sed '/^$/d')
 
   for u in "${existing_users[@]}"; do
-		if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
-    	CREATED_USERS+=("$u")
-		fi
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      # Solo agregar si no existe en el mapa
+      if [[ -z "${created_map[$u]:-}" ]]; then
+        CREATED_USERS+=("$u")
+        created_map["$u"]=1
+      fi
+    fi
   done
 
+  declare -A blocked_map=()
   mapfile -t system_users < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
 
   for u in "${system_users[@]}"; do
-    if [[ "$u" != "$USUARIO_PROTEGIDO" ]] && ! [[ " ${CREATED_USERS[*]} " =~ " $u " ]]; then
-      BLOCKED_USERS+=("$u")
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]] && [[ -z "${created_map[$u]:-}" ]]; then
+      # Solo agregar si no está ya en blocked_map
+      if [[ -z "${blocked_map[$u]:-}" ]]; then
+        BLOCKED_USERS+=("$u")
+        blocked_map["$u"]=1
+      fi
     fi
   done
 }
@@ -308,7 +339,7 @@ obtener_rol_actual() {
   echo "sin_rol"
 }
 
-asignar_rol_usuario() {
+solicitar_rol_usuario() {
   local usuario="$1"
   local rol_actual
   rol_actual=$(obtener_rol_actual)
@@ -356,26 +387,6 @@ asignar_rol_usuario() {
     return 1
   fi
 
-  if ! id "$username" &>/dev/null; then
-    echo "$rol"
-    return 0
-  fi
-
-  # Remover usuario de roles anteriores (excepto sudo)
-  for g in "${roles_disponibles[@]}"; do
-    gpasswd -d "$usuario" "$g" 2>/dev/null || true
-  done
-
-  # Agregar al grupo seleccionado
-  usermod -aG "$rol" "$usuario"
-
-  # Gestionar sudo según rol admin
-  if [[ " ${roles_admin[*]} " == *" $rol "* ]]; then
-    usermod -aG sudo "$usuario"
-  else
-    gpasswd -d "$usuario" sudo 2>/dev/null || true
-  fi
-
   log_accion "Usuario '$usuario' asignado al rol '$rol'."
   echo "$rol"
   return 0
@@ -410,7 +421,7 @@ agregar_usuario() {
 
   # Solicitar rol que será asignado al nuevo usuario
   local role
-  role=$(asignar_rol_usuario "$username") || {
+  role=$(solicitar_rol_usuario "$username") || {
     log_accion "Creación de usuario '$username' cancelada."
     mostrar_mensaje "No se asignó rol. Abortando la creación del usuario." "$RED"
     return
@@ -767,6 +778,270 @@ listar_usuarios() {
   read -rp "Presiona Enter para continuar..."
 }
 
+# Función para cambiar el rol de un usuario existente (excepto vivezatextil)
+cambiar_rol_usuario() {
+  # Combinar arrays y eliminar duplicados con un map asociativo, excluyendo 'vivezatextil'
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != $USUARIO_PROTEGIDO ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  # Convertir mapa a array
+  local usuarios_filtrados=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios_filtrados+=("$u")
+  done
+
+  if [ ${#usuarios_filtrados[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para cambiar rol." "$YELLOW"
+    return
+  fi
+
+  usuarios_filtrados+=("Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${usuarios_filtrados[@]}" | fzf --prompt="Seleccione usuario para cambiar rol: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  # Solicitar nuevo rol
+  local nuevo_rol
+  nuevo_rol=$(solicitar_rol_usuario "$usuario") || {
+    mostrar_mensaje "No se asignó rol. Abortando operación." "$RED"
+    return
+  }
+
+  if ! id "$usuario" &>/dev/null; then
+    mostrar_mensaje "Usuario '$usuario' no existe." "$RED"
+    return
+  fi
+
+  # Remover usuario de roles anteriores (excepto sudo)
+  for g in "${roles_disponibles[@]}"; do
+    gpasswd -d "$usuario" "$g" &>/dev/null || true
+  done
+
+  # Agregar nuevo rol
+  usermod -aG "$nuevo_rol" "$usuario" &>/dev/null
+
+  # Gestionar sudo según rol admin
+  if [[ " ${roles_admin[*]} " == *" $nuevo_rol "* ]]; then
+    usermod -aG sudo "$usuario" &>/dev/null
+  else
+    gpasswd -d "$usuario" sudo &>/dev/null || true
+  fi
+
+  log_accion "Usuario '$usuario' cambiado al rol '$nuevo_rol'."
+  mostrar_mensaje "Rol de usuario '$usuario' cambiado a '$nuevo_rol'." "$GREEN"
+}
+
+# Función para cambiar contraseña login de un usuario (excepto vivezatextil)
+cambiar_contrasena_login() {
+  # Obtener usuarios con login activo (no bloqueados)
+  mapfile -t usuarios_activos < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
+
+  usuarios=()
+  for u in "${usuarios_activos[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
+    passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
+    if [[ "$passwd_status" != *" L "* ]] && [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios+=("$u")
+    fi
+  done
+
+  opciones=("${usuarios[@]}" "Cancelar")
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para cambiar contraseña login: " --height=20 --border --ansi --no-multi)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  echo "Cambiando contraseña login para usuario: $usuario"
+  if passwd "$usuario"; then
+    log_accion "Contraseña login cambiada para usuario '$usuario'."
+    mostrar_mensaje "Contraseña login cambiada correctamente para '$usuario'." "$GREEN"
+  else
+    mostrar_mensaje "Error al cambiar contraseña login para '$usuario'." "$RED"
+  fi
+}
+
+# Función para cambiar contraseña SSH (regenerar claves) de un usuario (excepto vivezatextil)
+cambiar_contrasena_ssh() {
+  if [ ${#CREATED_USERS[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios con acceso SSH para cambiar clave." "$YELLOW"
+    return
+  fi
+
+  # Filtrar CREATED_USERS para excluir usuario protegido
+  usuarios=()
+  for u in "${CREATED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios+=("$u")
+    fi
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para cambiar clave SSH." "$YELLOW"
+    return
+  fi
+
+  opciones=("${usuarios[@]}" "Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione usuario para cambiar clave SSH: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  local user_key_dir="$KEYS_DIR/$usuario"
+  local key_file="$user_key_dir/id_ed25519_$usuario"
+
+  echo "Regenerando claves SSH para usuario: $usuario"
+
+  # Regenerar claves SSH sin frase
+  if sudo -u vivezatextil ssh-keygen -t ed25519 -f "$key_file" -N "" -q; then
+    # Copiar clave pública a authorized_keys del usuario
+    cp "${key_file}.pub" /home/"$usuario"/.ssh/authorized_keys
+    chmod 600 /home/"$usuario"/.ssh/authorized_keys
+    chown -R "$usuario":"$usuario" /home/"$usuario"/.ssh
+
+    log_accion "Clave SSH regenerada para usuario '$usuario'."
+    mostrar_mensaje "Clave SSH regenerada correctamente para '$usuario'. La clave privada está en: $key_file" "$GREEN"
+  else
+    mostrar_mensaje "Error al regenerar clave SSH para '$usuario'." "$RED"
+  fi
+}
+
+# Función para eliminar un usuario (excepto vivezatextil)
+eliminar_usuario() {
+  cargar_usuarios
+
+  # Crear mapa para evitar duplicados y excluir usuario protegido
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  local usuarios=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios+=("$u")
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para eliminar." "$YELLOW"
+    return
+  fi
+
+  usuarios+=("Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${usuarios[@]}" | fzf --prompt="Seleccione usuario para eliminar: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  if ! validar_no_protegido "$usuario"; then
+    return
+  fi
+
+  if confirmar "¿Estás seguro de eliminar el usuario '$usuario'? Esta acción no se puede deshacer. [Y/n]: "; then
+    # Eliminar usuario del sistema
+    if userdel -r "$usuario"; then
+      log_accion "Usuario '$usuario' eliminado del sistema."
+
+      # Eliminar carpeta de claves SSH exportables si existe
+      local user_key_dir="$KEYS_DIR/$usuario"
+      if [ -d "$user_key_dir" ]; then
+        rm -rf "$user_key_dir"
+        log_accion "Carpeta de claves SSH eliminada para usuario '$usuario'."
+      fi
+
+      # Actualizar lista de usuarios y configuración SSH
+      cargar_usuarios
+      actualizar_sshd_config
+
+      mostrar_mensaje "Usuario '$usuario' eliminado correctamente." "$GREEN"
+    else
+      mostrar_mensaje "Error al eliminar usuario '$usuario'." "$RED"
+      log_accion "Error eliminando usuario '$usuario'." "ERROR"
+    fi
+  else
+    mostrar_mensaje "Eliminación cancelada." "$YELLOW"
+  fi
+}
+
+# Función para generar y exportar reporte de usuarios
+generar_reporte() {
+  cargar_usuarios
+
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  local usuarios=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios+=("$u")
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios para generar reporte." "$YELLOW"
+    return
+  fi
+
+  local lineas=()
+  lineas+=("Usuario,Rol,Acceso Login,Acceso SSH")
+
+  for usuario in "${usuarios[@]}"; do
+    local rol
+    rol=$(obtener_rol_usuario "$usuario")
+    local login_estado
+    login_estado=$(estado_login "$usuario")
+    local ssh_estado
+    ssh_estado=$(estado_ssh "$usuario")
+
+    lineas+=("$usuario,$rol,$login_estado,$ssh_estado")
+  done
+
+  # Preguntar si se desea exportar
+  if confirmar "¿Deseas exportar el reporte a archivo CSV? [Y/n]: "; then
+    local archivo
+    read -rp "Nombre del archivo (sin extensión): " archivo
+    archivo="${archivo:-usuarios_report}"
+
+    local ruta="$PWD/${archivo}.csv"
+    printf "%s\n" "${lineas[@]}" > "$ruta"
+
+    mostrar_mensaje "Reporte exportado correctamente a: $ruta" "$GREEN"
+  else
+    # Mostrar reporte en texto plano con formato
+    printf "%-15s %-17s %-13s %-10s\n" "Usuario" "Rol" "Acceso Login" "Acceso SSH"
+    printf "%-15s %-17s %-13s %-10s\n" "---------------" "-----------------" "-------------" "----------"
+
+    for i in "${!lineas[@]}"; do
+      if [ $i -ne 0 ]; then
+        IFS=',' read -r usuario rol login ssh <<< "${lineas[$i]}"
+        printf "%-15s %-17s %-13s %-10s\n" "$usuario" "$rol" "$login" "$ssh"
+      fi
+    done
+    echo
+    read -rp "Presiona Enter para continuar..."
+  fi
+}
+
 # Permite mostrar el menu en consola
 mostrar_menu() {
   local rol_actual
@@ -821,15 +1096,15 @@ menu_principal() {
     case "$opcion" in
       "Ver usuarios") listar_usuarios ;;
       "Agregar usuario") agregar_usuario ;;
-      "Cambiar rol usuario") echo "Función Cambiar rol del usuario aún no es implementada." ;;
-      "Cambiar contraseña login") echo "Función Cambiar contraseña login aún no es implementada.";;
-      "Cambiar contraseña SSH") echo "Función cambiar contraseña SSH aún no es implementada." ;;
-      "Eliminar usuario") echo "Función Eliminar usuario aún no es implementada." ;;
+      "Cambiar rol usuario") cambiar_rol_usuario ;;
+      "Cambiar contraseña login") cambiar_contrasena_login ;;
+      "Cambiar contraseña SSH") cambiar_contrasena_ssh ;;
+      "Eliminar usuario") eliminar_usuario ;;
       "Bloquear acceso SSH") bloquear_ssh ;;
       "Desbloquear acceso SSH") desbloquear_ssh ;;
       "Bloquear acceso login") bloquear_login ;;
       "Desbloquear acceso login") desbloquear_login ;;
-      "Generar reporte") echo "Función Generar reporte aún no es implementada." ;;
+      "Generar reporte") generar_reporte ;;
       "Ayuda") echo "Función Mostrar ayuda aún no es implementada.";;
       "Salir")
 	clear
