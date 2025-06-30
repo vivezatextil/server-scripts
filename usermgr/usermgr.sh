@@ -3,16 +3,12 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.5.0 (rama usermgr/007-list-users)
+# Gestor avanzado de usuarios SSH - Versión 1.6.0 (rama usermgr/006-proteger-usuario-principal)
 #
-# Añadido:
-# - Función para listar usuarios (`listar_usuarios`) que muestra una tabla con el usuario, rol asignado, estado de acceso login y acceso SSH, con colores para diferenciar estados activos y bloqueados.
-# - Funciones auxiliares para obtener rol de usuario y estado de acceso.
-# - Interfaz de menú actualizada para incluir la opción "Ver usuarios".
-#
-# Arreglado:
-# - Corrección en `cargar_usuarios`: se reinician los arrays `CREATED_USERS` Y `BLOCKED_USERS` al cargar usuarios, evitando acumulación de datos y errores.
-#
+# Modificado:
+# - Filtrado para que 'vivezatextil' no aparezca en listados de usuarios para bloqueo/desbloqueo y listado general.
+# - Prevención de operaciones como eliminar, cambiar rol, bloquear/desbloquear acceso login y SSH para el usuario 'vivezatextil'.
+# 
 # ----------------------------------------------------------------------------------------
 
 # Colores para la consola
@@ -30,10 +26,12 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.5.0"
+VERSION="1.6.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
+
+USUARIO_PROTEGIDO="vivezatextil"
 
 CREATED_USERS=()
 BLOCKED_USERS=()
@@ -154,22 +152,31 @@ validar_e_instalar_dependencias() {
 }
 
 cargar_usuarios() {
-  CREATED_USERS=()
-  BLOCKED_USERS=()
-
   mapfile -t existing_users < <(grep "^AllowUsers" "$SSH_CONFIG" 2>/dev/null | sed "s/^AllowUsers//" | tr -s ' ' '\n' | sed '/^$/d')
 
   for u in "${existing_users[@]}"; do
-    CREATED_USERS+=("$u")
+		if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+    	CREATED_USERS+=("$u")
+		fi
   done
 
   mapfile -t system_users < <(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd)
 
   for u in "${system_users[@]}"; do
-    if ! [[ " ${CREATED_USERS[*]} " =~ " $u " ]]; then
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]] && ! [[ " ${CREATED_USERS[*]} " =~ " $u " ]]; then
       BLOCKED_USERS+=("$u")
     fi
   done
+}
+
+validar_no_protegido() {
+	local usuario="$1"
+	if [[ "$usuario" == "$USUARIO_PROTEGIDO" ]]; then
+		mostrar_mensaje "Operacion no permitida sobre el usuario '$USUARIO_PROTEGIDO'." "$RED"
+		log_accion "Intento bloqueado de operación sobre usuario protegido '$USUARIO_PROTEGIDO'." "ERROR"
+		return 1
+	fi
+	return 0
 }
 
 actualizar_sshd_config() {
@@ -514,8 +521,11 @@ bloquear_login() {
 
   usuarios_a_bloquear=()
   for u in "${usuarios_activos[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
     passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
-    if [[ "$passwd_status" != *" L "* ]]; then
+    if [[ "$passwd_status" != *" L "* ]] && [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
       usuarios_a_bloquear+=("$u")
     fi
   done
@@ -535,6 +545,10 @@ bloquear_login() {
     return
   fi
 
+	if ! validar_no_protegido "$usuario"; then
+		return
+	fi
+
   if usermod -L "$usuario"; then
     log_accion "Acceso login bloqueado para usuario '$usuario'."
     mostrar_mensaje "Acceso login bloqueado para '$usuario'." "$GREEN"
@@ -550,7 +564,7 @@ desbloquear_login() {
   usuarios_a_desbloquear=()
   for u in "${usuarios_bloqueados[@]}"; do
     passwd_status=$(passwd -S "$u" 2>/dev/null || echo "")
-    if [[ "$passwd_status" == *" L "* ]]; then
+    if [[ "$passwd_status" == *" L "* ]] && [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
       usuarios_a_desbloquear+=("$u")
     fi
   done
@@ -568,6 +582,10 @@ desbloquear_login() {
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
   fi
+
+	if ! validar_no_protegido "$usuario"; then
+		return
+	fi
 
   if usermod -U "$usuario"; then
     log_accion "Acceso login desbloqueado para usuario '$usuario'."
@@ -593,6 +611,10 @@ bloquear_ssh() {
     return
   fi
 
+	if ! validar_no_protegido "$usuario"; then
+		return
+	fi
+
   CREATED_USERS=($(printf '%s\n' "${CREATED_USERS[@]}" | grep -v "^$usuario$"))
   BLOCKED_USERS+=("$usuario")
 
@@ -616,6 +638,10 @@ desbloquear_ssh() {
     mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
   fi
+
+	if ! validar_no_protegido "$usuario"; then
+		return
+	fi
 
   BLOCKED_USERS=($(printf '%s\n' "${BLOCKED_USERS[@]}" | grep -v "^$usuario$"))
   CREATED_USERS+=("$usuario")
@@ -719,6 +745,9 @@ listar_usuarios() {
   # Usamos associative array para evitar duplicados
   declare -A seen=()
   for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+		if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+			continue
+		fi
     seen["$u"]=1
   done
   for usuario in "${!seen[@]}"; do
