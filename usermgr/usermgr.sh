@@ -9,12 +9,17 @@ IFS=$'\n\t'
 # - Función `cambiar_rol_usuario` para modificar rol de usuarios.
 # - Función para cambiar contraseña de login a usuarios existentes, con exclusión del usuario protegido 'vivezatextil'.
 # - Función para cambiar contraseña SSH (regenerar claves) para usuarios con acceso SSH activo, excluyendo 'vivezatextil'.
+# Función para eliminar usuarios con confirmación previa y limpieza completa de datos.
+# - Eliminación segura excluyendo al usuario protegido `vivezatextil`.
+# - Actualización automática de la configuración SSH luego de eliminar usuarios.
+# - Registro detallado de acciones en el log.
 #
 # Modificado:
 # - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
 # - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
 # - Refactorización en la gestión de listas de usuarios para evitar duplicados al mostrar usuarios en cambio de contraseña login y SSH.
 # - Validación para impedir operaciones de cambio de contraseña sobre el usuario protegido.
+# - Refactorización general para mejorar manejo de usuarios y roles.
 # 
 # ----------------------------------------------------------------------------------------
 
@@ -912,6 +917,67 @@ cambiar_contrasena_ssh() {
   fi
 }
 
+# Función para eliminar un usuario (excepto vivezatextil)
+eliminar_usuario() {
+  cargar_usuarios
+
+  # Crear mapa para evitar duplicados y excluir usuario protegido
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  local usuarios=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios+=("$u")
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios disponibles para eliminar." "$YELLOW"
+    return
+  fi
+
+  usuarios+=("Cancelar")
+
+  local usuario
+  usuario=$(printf '%s\n' "${usuarios[@]}" | fzf --prompt="Seleccione usuario para eliminar: " --height=20 --border --ansi --no-multi --cycle)
+  if [[ -z "$usuario" || "$usuario" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
+    return
+  fi
+
+  if ! validar_no_protegido "$usuario"; then
+    return
+  fi
+
+  if confirmar "¿Estás seguro de eliminar el usuario '$usuario'? Esta acción no se puede deshacer. [Y/n]: "; then
+    # Eliminar usuario del sistema
+    if userdel -r "$usuario"; then
+      log_accion "Usuario '$usuario' eliminado del sistema."
+
+      # Eliminar carpeta de claves SSH exportables si existe
+      local user_key_dir="$KEYS_DIR/$usuario"
+      if [ -d "$user_key_dir" ]; then
+        rm -rf "$user_key_dir"
+        log_accion "Carpeta de claves SSH eliminada para usuario '$usuario'."
+      fi
+
+      # Actualizar lista de usuarios y configuración SSH
+      cargar_usuarios
+      actualizar_sshd_config
+
+      mostrar_mensaje "Usuario '$usuario' eliminado correctamente." "$GREEN"
+    else
+      mostrar_mensaje "Error al eliminar usuario '$usuario'." "$RED"
+      log_accion "Error eliminando usuario '$usuario'." "ERROR"
+    fi
+  else
+    mostrar_mensaje "Eliminación cancelada." "$YELLOW"
+  fi
+}
+
 # Permite mostrar el menu en consola
 mostrar_menu() {
   local rol_actual
@@ -969,7 +1035,7 @@ menu_principal() {
       "Cambiar rol usuario") cambiar_rol_usuario ;;
       "Cambiar contraseña login") cambiar_contrasena_login ;;
       "Cambiar contraseña SSH") cambiar_contrasena_ssh ;;
-      "Eliminar usuario") echo "Función Eliminar usuario aún no es implementada." ;;
+      "Eliminar usuario") eliminar_usuario ;;
       "Bloquear acceso SSH") bloquear_ssh ;;
       "Desbloquear acceso SSH") desbloquear_ssh ;;
       "Bloquear acceso login") bloquear_login ;;

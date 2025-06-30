@@ -12,12 +12,17 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.
 - Función `cambiar_rol_usuario` para modifivar el rol de los usuarios.
 - Función para cambiar contraseña de login a usuarios existentes, con exclusión del usuario protegido 'vivezatextil'.
 - Función para cambiar contraseña SSH (regenerar claves) para usuarios con acceso SSH activo, excluyendo 'vivezatextil'.
+- Función para eliminar usuarios con confirmación previa y limpieza completa de datos.
+- Eliminación segura excluyendo al usuario protegido `vivezatextil`.
+- Actualización automática de la configuración SSH luego de eliminar usuarios.
+- Registro detallado de acciones en el log.
 
 ### Modificado
 - Función `asignar_rol_usuario` para que solo solicite el rol que le será asignado a un usuario (al crearlo o modificar su rol)
 - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
 - Refactorización en la gestión de listas de usuarios para evitar duplicados al mostrar usuarios en cambio de contraseña login y SSH.
 - Validación para impedir operaciones de cambio de contraseña sobre el usuario protegido.
+- Refactorización general para mejorar manejo de usuarios y roles.
 
 ---
 
