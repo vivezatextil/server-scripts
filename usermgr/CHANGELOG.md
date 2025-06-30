@@ -16,6 +16,9 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.
 - Eliminación segura excluyendo al usuario protegido `vivezatextil`.
 - Actualización automática de la configuración SSH luego de eliminar usuarios.
 - Registro detallado de acciones en el log.
+- Función para generar reportes de usuarios con detalles de roles y accesos.
+- Exportación de reportes a archivo CSV.
+- Visualización formateada de reportes en consola.
 
 ### Modificado
 - Función `asignar_rol_usuario` para que solo solicite el rol que le será asignado a un usuario (al crearlo o modificar su rol)

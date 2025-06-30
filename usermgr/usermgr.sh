@@ -13,6 +13,9 @@ IFS=$'\n\t'
 # - Eliminación segura excluyendo al usuario protegido `vivezatextil`.
 # - Actualización automática de la configuración SSH luego de eliminar usuarios.
 # - Registro detallado de acciones en el log.
+# - Función para generar reportes de usuarios con detalles de roles y accesos.
+# - Exportación de reportes a archivo CSV.
+# - Visualización formateada de reportes en consola.
 #
 # Modificado:
 # - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
@@ -978,6 +981,67 @@ eliminar_usuario() {
   fi
 }
 
+# Función para generar y exportar reporte de usuarios
+generar_reporte() {
+  cargar_usuarios
+
+  declare -A usuarios_map=()
+  for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
+      usuarios_map["$u"]=1
+    fi
+  done
+
+  local usuarios=()
+  for u in "${!usuarios_map[@]}"; do
+    usuarios+=("$u")
+  done
+
+  if [ ${#usuarios[@]} -eq 0 ]; then
+    mostrar_mensaje "No hay usuarios para generar reporte." "$YELLOW"
+    return
+  fi
+
+  local lineas=()
+  lineas+=("Usuario,Rol,Acceso Login,Acceso SSH")
+
+  for usuario in "${usuarios[@]}"; do
+    local rol
+    rol=$(obtener_rol_usuario "$usuario")
+    local login_estado
+    login_estado=$(estado_login "$usuario")
+    local ssh_estado
+    ssh_estado=$(estado_ssh "$usuario")
+
+    lineas+=("$usuario,$rol,$login_estado,$ssh_estado")
+  done
+
+  # Preguntar si se desea exportar
+  if confirmar "¿Deseas exportar el reporte a archivo CSV? [Y/n]: "; then
+    local archivo
+    read -rp "Nombre del archivo (sin extensión): " archivo
+    archivo="${archivo:-usuarios_report}"
+
+    local ruta="$PWD/${archivo}.csv"
+    printf "%s\n" "${lineas[@]}" > "$ruta"
+
+    mostrar_mensaje "Reporte exportado correctamente a: $ruta" "$GREEN"
+  else
+    # Mostrar reporte en texto plano con formato
+    printf "%-15s %-17s %-13s %-10s\n" "Usuario" "Rol" "Acceso Login" "Acceso SSH"
+    printf "%-15s %-17s %-13s %-10s\n" "---------------" "-----------------" "-------------" "----------"
+
+    for i in "${!lineas[@]}"; do
+      if [ $i -ne 0 ]; then
+        IFS=',' read -r usuario rol login ssh <<< "${lineas[$i]}"
+        printf "%-15s %-17s %-13s %-10s\n" "$usuario" "$rol" "$login" "$ssh"
+      fi
+    done
+    echo
+    read -rp "Presiona Enter para continuar..."
+  fi
+}
+
 # Permite mostrar el menu en consola
 mostrar_menu() {
   local rol_actual
@@ -1040,7 +1104,7 @@ menu_principal() {
       "Desbloquear acceso SSH") desbloquear_ssh ;;
       "Bloquear acceso login") bloquear_login ;;
       "Desbloquear acceso login") desbloquear_login ;;
-      "Generar reporte") echo "Función Generar reporte aún no es implementada." ;;
+      "Generar reporte") generar_reporte ;;
       "Ayuda") echo "Función Mostrar ayuda aún no es implementada.";;
       "Salir")
 	clear
