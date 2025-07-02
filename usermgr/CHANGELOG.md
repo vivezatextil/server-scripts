@@ -5,6 +5,27 @@ Todos los cambios importantes en este proyecto serán documentados en este archi
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2025-07-02
+
+### Agregado
+- Función para generar reportes profesionales de usuarios con datos extendidos:
+  - Fecha aproximada de creación (último cambio de contraseña).
+  - Última conexión y duración de sesión.
+  - Número de intentos fallidos de acceso.
+- Opción para exportar el reporte a archivo CSV con formato delimitado y encabezados claros.
+- Opción para mostrar el reporte directamente en consola con tabla formateada y colores.
+- Filtros para reportes por rol, estado de login y estado SSH.
+- Opción para anonimizar datos personales en el reporte.
+
+### Modificado
+- Eliminada la función de exportación a XLSX para evitar problemas con dependencias externas y errores de ejecución.
+- Menú de exportación actualizado para ofrecer solo opciones de consola y CSV.
+
+### Corregido
+- Evitar duplicados en la lista de usuarios al generar reportes.
+- Exclusión correcta del usuario protegido `vivezatextil` en reportes y operaciones.
+
+---
 
 ## [1.7.0] - 2025-06-30
 
