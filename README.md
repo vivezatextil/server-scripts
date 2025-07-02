@@ -1,67 +1,86 @@
 # Scripts para el servidor de Viveza Textil
 
-Este repositorio contiene los scripts necesarios para la administracion del servidor de Viveza Textil.
+Este repositorio contiene los scripts necesarios para la administración del servidor de Viveza Textil.
 
 ---
 
 ## Scripts
-- **[backups](https://github.com/vivezatextil/server-scripts/tree/main/backups)**: Script para realizar los backups del servidor de manera segura.
+
+- **[backupmgr](https://github.com/vivezatextil/server-scripts/tree/main/backupmgr)**: Script para realizar backups seguros del servidor.
+- **[usermgr](https://github.com/vivezatextil/server-scripts/tree/main/usermgr)**: Gestor avanzado de usuarios SSH con roles, bloqueo, reportes y auditoría.
 
 ---
 
 ## 1. Configuración necesaria antes de la instalación
 
-Para poder instalar estos scripts en el servidor (por primera vez) es necesario tener Git instalado y configurado. Puedes verlo en la [documentación del servidor](https://github.com/vivezatextil/server-scripts/tree/main). Además es necesario lo siguiente:
-
-
 ### 1.1 Configuración de claves SSH para autenticación con la cuenta de Github de [Viveza Textil](https://github.com/vivezatextil)
 
-Primero inicia sesión en la cuenta de Github de Viveza, ve a configuración en [SSH and GPG keys](https://github.com/settings/keys), aqui registraremos nuestra clave publica SSH para poder clonar el repositorio.
+Primero inicia sesión en la cuenta de Github de Viveza, ve a configuración en [SSH and GPG keys](https://github.com/settings/keys) y registra tu clave pública SSH.
 
-Ahora genera las claves SSH:
+Genera las claves SSH con:
 
 ```bash
-ssh-keygen -t ed25519 -C "soporte@vivezatextil.com"
+ssh-keygen -t ed25519 -C "soporte@vivezatextil.com" -f ~/.ssh/id_ed25519_github_vivezatextil
 ```
 
-Para el nombre de las claves usa: `id_ed25519_github_vivezatextil`.
-
-Después agregamos la clave SSH privada al `ssh-agent`:
+Agrega la clave SSH privada al `ssh-agent`:
 
 ```bash
 eval "$(ssh-agent -s)"
 ssh-add ~/.ssh/id_ed25519_github_vivezatextil
 ```
 
-Por último, creamos el archivo de configuracion SSH en `~/.ssh/config` para agregar el alias y que no nos solicite la contraseña cada vez que clonemos o actualicemos el repositorio:
+Configura el alias SSH en `~/.ssh/config`:
 
 ```bash
-# Cuenta Github (vivezatextil)
 Host github-vivezatextil
-        HostName github.com
-        User git
-        IdentityFile ~/.ssh/id_ed25519_github_vivezatextil
-        IdentitiesOnly yes
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_github_vivezatextil
+    IdentitiesOnly yes
 ```
 
-Probamos la conexión para ver que funcione:
+Prueba la conexión:
 
 ```bash
 ssh -T git@github-vivezatextil
 ```
 
-Si recibes un error, indica que hay problema con la clave o el alias.
-
 ---
 
 ## 2. Instalación de los scripts
 
-Para instalar los cripts en el servidor basta con ejecutar:
+Ejecuta la instalación automatizada:
 
 ```bash
 curl -o- https://raw.githubusercontent.com/vivezatextil/server-scripts/main/install.sh | sudo bash
 ```
 
-Esto clonara el repositorio en `/opt/server-scripts`, creará los symlinks y estaran disponibles para usar globalmente. Es importante realizar la instalación con un usuario con privilegios `sudo`.
+Esto clona el repositorio en `/opt/server-scripts`, asigna permisos, crea symlinks para los comandos globales `backupmgr` y `usermgr`.
 
-Para la **configuración de los backups** vea la [documentación del script `backupmgr.sh`](https://github.com/vivezatextil/server-scripts/blob/main/backupmgr/README.md). Omita el paso 3 si se instaló mediante el script de instalación `install.sh`.
+**Importante:** Ejecutar como usuario con permisos `sudo`.
+
+---
+
+## 3. Uso básico
+
+- Ejecuta el gestor de usuarios con:
+
+```bash
+sudo usermgr
+```
+
+- Ejecuta el gestor de backups con:
+
+```bash
+sudo backupmgr
+```
+
+---
+
+## 4. Documentación adicional
+
+Para configurar y usar el backup, consulta la documentación de [backupmgr](https://github.com/vivezatextil/server-scripts/blob/main/backupmgr/README.md).
+
+Para más información sobre el gestor de usuarios, consulta [usermgr](https://github.com/vivezatextil/server-scripts/blob/main/usermgr/README.md).
+

@@ -5,6 +5,13 @@ Todos los cambios importantes en este proyecto serán documentados en este archi
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.0.1] - 2025-07-02
+
+### Changed
+- Actualizado `install.sh` para incluir creación de symlink para `usermgr`.
+- Ajustes menores en mensajes y estructura.
+
 ---
 
 ## [2.0.0] - 2025-06-21
@@ -14,6 +21,8 @@ y este proyecto se adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.
 ### Changed
 - Renombrado el script `backup_server.sh` y su carpeta a `backupmgr` para mayor claridad y profesionalismo.
 - Actualizado el script de instalación `install.sh` para reflejar los nuevos nombres y rutas de los scripts.
+
+---
 
 ## [1.0.0] - 2025-06-20
 
