@@ -3,27 +3,25 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ----------------------------------------------------------------------------------------
-# Gestor avanzado de usuarios SSH - Versión 1.7.0 (rama usermgr/007-user-management-enhancements)
+# Gestor avanzado de usuarios SSH - Versión 1.8.0 (rama usermgr/008-reporting-enhancements)
 #
-# Agregado:
-# - Función `cambiar_rol_usuario` para modificar rol de usuarios.
-# - Función para cambiar contraseña de login a usuarios existentes, con exclusión del usuario protegido 'vivezatextil'.
-# - Función para cambiar contraseña SSH (regenerar claves) para usuarios con acceso SSH activo, excluyendo 'vivezatextil'.
-# Función para eliminar usuarios con confirmación previa y limpieza completa de datos.
-# - Eliminación segura excluyendo al usuario protegido `vivezatextil`.
-# - Actualización automática de la configuración SSH luego de eliminar usuarios.
-# - Registro detallado de acciones en el log.
-# - Función para generar reportes de usuarios con detalles de roles y accesos.
-# - Exportación de reportes a archivo CSV.
-# - Visualización formateada de reportes en consola.
+# Agregado
+# - Función para generar reportes profesionales de usuarios con datos extendidos:
+#   - Fecha aproximada de creación (último cambio de contraseña).
+#   - Última conexión y duración de sesión.
+#   - Número de intentos fallidos de acceso.
+# - Opción para exportar el reporte a archivo CSV con formato delimitado y encabezados claros.
+# - Opción para mostrar el reporte directamente en consola con tabla formateada y colores.
+# - Filtros para reportes por rol, estado de login y estado SSH.
+# - Opción para anonimizar datos personales en el reporte.
+
+# Modificado
+# - Eliminada la función de exportación a XLSX para evitar problemas con dependencias externas y errores de ejecución.
+#- Menú de exportación actualizado para ofrecer solo opciones de consola y CSV.
 #
-# Modificado:
-# - Función `asignar_rol_usuario` para solo solicitar el rol que le será asignado al usuario (al crearlo o cambiar su rol)
-# - Nombre de la función `asignar_rol_usuario` por `solicitar_rol_usuario`.
-# - Refactorización en la gestión de listas de usuarios para evitar duplicados al mostrar usuarios en cambio de contraseña login y SSH.
-# - Validación para impedir operaciones de cambio de contraseña sobre el usuario protegido.
-# - Refactorización general para mejorar manejo de usuarios y roles.
-# 
+# Corregido
+# - Evitar duplicados en la lista de usuarios al generar reportes.
+# - Exclusión correcta del usuario protegido `vivezatextil` en reportes y operaciones.
 # ----------------------------------------------------------------------------------------
 
 # Colores para la consola
@@ -41,7 +39,7 @@ KEYS_DIR="/var/lib/usermgr/keys"
 SSH_CONFIG="/etc/ssh/sshd_config"
 
 # Version del script
-VERSION="1.7.0"
+VERSION="1.8.0"
 
 # Usuario real que ejecuta el script (si está con sudo, sera SUDO_USER)
 RUN_USER="${SUDO_USER:-$USER}"
@@ -981,65 +979,179 @@ eliminar_usuario() {
   fi
 }
 
-# Función para generar y exportar reporte de usuarios
+# Obtener fecha de creación del usuario (aproximada usando fecha de cambio de contraseña)
+obtener_fecha_creacion() {
+  local usuario="$1"
+  # Usamos chage para obtener la última fecha de cambio de contraseña, que suele ser cercana a creación
+  local fecha
+  fecha=$(chage -l "$usuario" 2>/dev/null | grep "Último cambio" | cut -d: -f2- | xargs)
+  echo "$fecha"
+}
+
+# Obtener última conexión y duración de sesión
+obtener_ultima_conexion() {
+  local usuario="$1"
+  # Usamos 'last' para obtener la última conexión
+  local linea
+  linea=$(last -F -n 1 "$usuario" | head -1)
+  if [[ "$linea" =~ "no logins" || -z "$linea" ]]; then
+    echo "Nunca"
+    echo "0"
+  else
+    # Extraemos la fecha y duración aproximada
+    local fecha=$(echo "$linea" | awk '{for(i=5;i<=8;i++) printf $i " "; print ""}' | xargs)
+    local duracion=$(echo "$linea" | grep -oP '\(\K[^)]+' || echo "desconocida")
+    echo "$fecha"
+    echo "$duracion"
+  fi
+}
+
+# Obtener número de intentos fallidos (ejemplo con auth.log)
+obtener_intentos_fallidos() {
+  local usuario="$1"
+  # Contar intentos fallidos en auth.log (puede variar según distro)
+  local count=0
+  if [ -f /var/log/auth.log ]; then
+    count=$(grep "Failed password for $usuario" /var/log/auth.log 2>/dev/null | wc -l)
+  elif [ -f /var/log/secure ]; then
+    count=$(grep "Failed password for $usuario" /var/log/secure 2>/dev/null | wc -l)
+  fi
+  echo "$count"
+}
+
+# Función para listar usuarios con todos los datos extendidos, opción anonimizar y filtros
 generar_reporte() {
   cargar_usuarios
 
-  declare -A usuarios_map=()
+  # Variables para filtro (pueden ser configuradas antes o pasadas como parámetros)
+  local filtro_rol="${1:-}"
+  local filtro_login="${2:-}"  # activo, bloqueado, o vacío
+  local filtro_ssh="${3:-}"    # activo, bloqueado, o vacío
+  local anonimizar="${4:-false}"
+
+  declare -A seen=()
+  local usuarios_finales=()
+
   for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
-    if [[ "$u" != "$USUARIO_PROTEGIDO" ]]; then
-      usuarios_map["$u"]=1
+    # Saltar usuario protegido
+    if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+      continue
     fi
+    # Filtrar por rol si aplica
+    local rol
+    rol=$(obtener_rol_usuario "$u")
+    if [[ -n "$filtro_rol" && "$filtro_rol" != "$rol" ]]; then
+      continue
+    fi
+    # Filtrar por login
+    local login_estado
+    login_estado=$(estado_login "$u")
+    if [[ -n "$filtro_login" && "$filtro_login" != "$login_estado" ]]; then
+      continue
+    fi
+    # Filtrar por ssh
+    local ssh_estado
+    ssh_estado=$(estado_ssh "$u")
+    if [[ -n "$filtro_ssh" && "$filtro_ssh" != "$ssh_estado" ]]; then
+      continue
+    fi
+
+    # Evitar duplicados
+    seen["$u"]=1
   done
 
-  local usuarios=()
-  for u in "${!usuarios_map[@]}"; do
-    usuarios+=("$u")
+  for usuario in "${!seen[@]}"; do
+    local rol login ssh fecha_creacion ult_conexion duracion intentos
+
+    rol=$(obtener_rol_usuario "$usuario")
+    login=$(estado_login "$usuario")
+    ssh=$(estado_ssh "$usuario")
+    fecha_creacion=$(obtener_fecha_creacion "$usuario")
+    read -r ult_conexion duracion < <(obtener_ultima_conexion "$usuario")
+    intentos=$(obtener_intentos_fallidos "$usuario")
+
+    # Si anonimizar está activo, ocultamos datos personales
+    if [[ "$anonimizar" == "true" ]]; then
+      usuario="anonimizado"
+      fecha_creacion="--"
+      ult_conexion="--"
+      duracion="--"
+      intentos="--"
+    fi
+
+    usuarios_finales+=("$usuario|$rol|$login|$ssh|$fecha_creacion|$ult_conexion|$duracion|$intentos")
   done
 
-  if [ ${#usuarios[@]} -eq 0 ]; then
-    mostrar_mensaje "No hay usuarios para generar reporte." "$YELLOW"
+  # Mostrar reporte en consola
+  imprimir_reporte_tabla "${usuarios_finales[@]}"
+}
+
+# Imprimir reporte en formato tabla extendida
+imprimir_reporte_tabla() {
+  local usuarios=("$@")
+  local header_fmt="${BOLD}${YELLOW}%-15s %-15s %-12s %-10s %-20s %-20s %-10s %-10s${NC}\n"
+  local row_fmt="%-15s %-15s %-12s %-10s %-20s %-20s %-10s %-10s\n"
+
+  printf "$header_fmt" "Usuario" "Rol" "Login" "SSH" "Fecha Creación" "Última Conexión" "Duración" "Fallidos"
+  printf "%-15s %-15s %-12s %-10s %-20s %-20s %-10s %-10s\n" "---------------" "---------------" "------------" "----------" "--------------------" "--------------------" "----------" "--------"
+
+  for linea in "${usuarios[@]}"; do
+    IFS='|' read -r usuario rol login ssh fecha_creacion ult_conexion duracion intentos <<< "$linea"
+    printf "$row_fmt" "$usuario" "$rol" "$login" "$ssh" "$fecha_creacion" "$ult_conexion" "$duracion" "$intentos"
+  done
+  echo
+  read -rp "Presiona Enter para continuar..."
+}
+
+# Exportar reporte a CSV
+exportar_reporte_csv() {
+  local archivo="${1:-reporte_usuarios.csv}"
+  cargar_usuarios
+
+  {
+    echo "Usuario,Rol,Login,SSH,Fecha Creación,Última Conexión,Duración,Fallidos"
+    for u in "${CREATED_USERS[@]}" "${BLOCKED_USERS[@]}"; do
+      if [[ "$u" == "$USUARIO_PROTEGIDO" ]]; then
+        continue
+      fi
+      local rol login ssh fecha_creacion ult_conexion duracion intentos
+      rol=$(obtener_rol_usuario "$u")
+      login=$(estado_login "$u")
+      ssh=$(estado_ssh "$u")
+      fecha_creacion=$(obtener_fecha_creacion "$u")
+      read -r ult_conexion duracion < <(obtener_ultima_conexion "$u")
+      intentos=$(obtener_intentos_fallidos "$u")
+
+      echo "\"$u\",\"$rol\",\"$login\",\"$ssh\",\"$fecha_creacion\",\"$ult_conexion\",\"$duracion\",\"$intentos\""
+    done
+  } > "$archivo"
+
+  log_accion "Reporte exportado a CSV en $archivo."
+  echo "Reporte exportado correctamente a $archivo"
+}
+
+# Función principal para elegir tipo de reporte y exportar
+menu_exportar_reporte() {
+  local opciones=("Mostrar en consola" "Exportar a CSV" "Cancelar")
+
+  local opcion
+  opcion=$(printf '%s\n' "${opciones[@]}" | fzf --prompt="Seleccione tipo de reporte: " --height=10 --border --ansi --no-multi --cycle)
+  if [[ -z "$opcion" || "$opcion" == "Cancelar" ]]; then
+    mostrar_mensaje "Operación cancelada." "$YELLOW"
     return
   fi
 
-  local lineas=()
-  lineas+=("Usuario,Rol,Acceso Login,Acceso SSH")
-
-  for usuario in "${usuarios[@]}"; do
-    local rol
-    rol=$(obtener_rol_usuario "$usuario")
-    local login_estado
-    login_estado=$(estado_login "$usuario")
-    local ssh_estado
-    ssh_estado=$(estado_ssh "$usuario")
-
-    lineas+=("$usuario,$rol,$login_estado,$ssh_estado")
-  done
-
-  # Preguntar si se desea exportar
-  if confirmar "¿Deseas exportar el reporte a archivo CSV? [Y/n]: "; then
-    local archivo
-    read -rp "Nombre del archivo (sin extensión): " archivo
-    archivo="${archivo:-usuarios_report}"
-
-    local ruta="$PWD/${archivo}.csv"
-    printf "%s\n" "${lineas[@]}" > "$ruta"
-
-    mostrar_mensaje "Reporte exportado correctamente a: $ruta" "$GREEN"
-  else
-    # Mostrar reporte en texto plano con formato
-    printf "%-15s %-17s %-13s %-10s\n" "Usuario" "Rol" "Acceso Login" "Acceso SSH"
-    printf "%-15s %-17s %-13s %-10s\n" "---------------" "-----------------" "-------------" "----------"
-
-    for i in "${!lineas[@]}"; do
-      if [ $i -ne 0 ]; then
-        IFS=',' read -r usuario rol login ssh <<< "${lineas[$i]}"
-        printf "%-15s %-17s %-13s %-10s\n" "$usuario" "$rol" "$login" "$ssh"
-      fi
-    done
-    echo
-    read -rp "Presiona Enter para continuar..."
-  fi
+  case "$opcion" in
+    "Mostrar en consola")
+      generar_reporte
+      ;;
+    "Exportar a CSV")
+      read -rp "Nombre archivo CSV (default: reporte_usuarios.csv): " archivo_csv
+      archivo_csv="${archivo_csv:-reporte_usuarios.csv}"
+      exportar_reporte_csv "$archivo_csv"
+      read -rp "Presiona Enter para continuar..."
+      ;;
+  esac
 }
 
 # Permite mostrar el menu en consola
@@ -1064,7 +1176,6 @@ mostrar_menu() {
     "Bloquear acceso login"
     "Desbloquear acceso login"
     "Generar reporte"
-    "Ayuda"
     "Salir"
   )
 
@@ -1104,8 +1215,7 @@ menu_principal() {
       "Desbloquear acceso SSH") desbloquear_ssh ;;
       "Bloquear acceso login") bloquear_login ;;
       "Desbloquear acceso login") desbloquear_login ;;
-      "Generar reporte") generar_reporte ;;
-      "Ayuda") echo "Función Mostrar ayuda aún no es implementada.";;
+      "Generar reporte") menu_exportar_reporte ;;
       "Salir")
 	clear
         echo "¡Hasta pronto ${SUDO_USER:-$USER}!"
